@@ -72,7 +72,7 @@ struct ITU_EntityStorageContext
 	stbds_hm(Sint32, const char*) tag_debug_names;
 };
 
-static ITU_ComponentType component_type_counter;
+const ITU_ComponentType INVALID_COMPONENT_TYPE = -1;
 ITU_EntityStorageContext ctx_estorage;
 
 ITU_Component* itu_component_pool_create(size_t element_size, Uint64 total_num_component, const char* component_name);
@@ -113,8 +113,7 @@ ITU_Component* itu_component_pool_create(Uint64 element_size, Uint64 total_num_c
 }
 
 ITU_ComponentType itu_sys_estorage_add_component_pool(Uint64 element_size, Uint64 total_num_component, ITU_ComponentType* ref_component_type, const char* component_name);
-void itu_sys_estorage_add_component_debug_ui_render(ITU_ComponentType component_type, ITU_ComponendDebugUIRender fn_debug_ui_render)
-;
+void itu_sys_estorage_add_component_debug_ui_render(ITU_ComponentType component_type, const char* name, ITU_ComponendDebugUIRender fn_debug_ui_render);
 
 void itu_sys_estorage_init(int starting_entities_count, bool enable_standard_components=true)
 {
@@ -155,9 +154,16 @@ ITU_ComponentType itu_sys_estorage_add_component_pool(Uint64 element_size, Uint6
 	return pool->type;
 }
 
-void itu_sys_estorage_add_component_debug_ui_render(ITU_ComponentType component_type, ITU_ComponendDebugUIRender fn_debug_ui_render)
+void itu_sys_estorage_add_component_debug_ui_render(ITU_ComponentType type, const char* name, ITU_ComponendDebugUIRender fn_debug_ui_render)
 {
-	ctx_estorage.components[component_type]->fn_debug_ui_render = fn_debug_ui_render;
+	if(type == INVALID_COMPONENT_TYPE)
+	{
+		SDL_Log("Trying to set debug visualization of disabled component %s. Did you forget to call enable_component()?", name);
+		SDL_assert(type != INVALID_COMPONENT_TYPE);
+	}
+	SDL_assert(type < ctx_estorage.components_count);
+
+	ctx_estorage.components[type]->fn_debug_ui_render = fn_debug_ui_render;
 }
 
 void itu_sys_estorage_clear_all_entities()
@@ -852,10 +858,16 @@ void itu_entity_id_to_stringid(ITU_EntityId id, char* buffer, int max_len)
 }
 
 // `in_data_copy`: default component init. Can be null
-void itu_entity_component_add(ITU_EntityId id, ITU_ComponentType component_type, void* in_data_copy)
+void itu_entity_component_add(ITU_EntityId id, ITU_ComponentType type, const char* name, void* in_data_copy)
 {
-	SDL_assert(component_type < COMPONENTS_COUNT_MAX);
-	Uint64 component_bit = 1ll << component_type;
+	if(type == INVALID_COMPONENT_TYPE)
+	{
+		SDL_Log("Trying to add data of disabled component %s. Did you forget to call enable_component()?", name);
+		SDL_assert(type != INVALID_COMPONENT_TYPE);
+	}
+	SDL_assert(type < COMPONENTS_COUNT_MAX);
+
+	Uint64 component_bit = 1ll << type;
 
 	if(!itu_entity_is_valid(id))
 	{
@@ -865,22 +877,28 @@ void itu_entity_component_add(ITU_EntityId id, ITU_ComponentType component_type,
 
 	if(ctx_estorage.entities[id.index].component_mask & component_bit)
 	{
-		SDL_Log("WARNING entity %d alread has component type %d\n", id.index, component_type);
+		SDL_Log("WARNING entity %d alread has component type %d\n", id.index, type);
 		return;
 	}
 
 	ctx_estorage.entities[id.index].component_mask |= component_bit;
 
-	ITU_Component* component = ctx_estorage.components[component_type];
+	ITU_Component* component = ctx_estorage.components[type];
 	itu_component_pool_assign(component, id);
 	if(in_data_copy)
 		itu_component_pool_data_set(component, id, in_data_copy);
 }
 
-void itu_entity_component_remove(ITU_EntityId id, ITU_ComponentType component_type)
+void itu_entity_component_remove(ITU_EntityId id, ITU_ComponentType type, const char* name)
 {
-	SDL_assert(component_type < COMPONENTS_COUNT_MAX);
-	Uint64 component_bit = 1ll << component_type;
+	if(type == INVALID_COMPONENT_TYPE)
+	{
+		SDL_Log("Trying to remove data of disabled component %s. Did you forget to call enable_component()?", name);
+		SDL_assert(type != INVALID_COMPONENT_TYPE);
+	}
+	SDL_assert(type < COMPONENTS_COUNT_MAX);
+
+	Uint64 component_bit = 1ll << type;
 	
 	if(!itu_entity_is_valid(id))
 	{
@@ -890,13 +908,13 @@ void itu_entity_component_remove(ITU_EntityId id, ITU_ComponentType component_ty
 
 	if(!(ctx_estorage.entities[id.index].component_mask & component_bit))
 	{
-		SDL_Log("WARNING entity %d does NOT has component type %d\n", id.index, component_type);
+		SDL_Log("WARNING entity %d does NOT has component type %d\n", id.index, type);
 		return;
 	}
 
 	ctx_estorage.entities[id.index].component_mask &= ~component_bit; // keeps all bits of `id.component_mask` the same except for component_bit, which is set to 0
 
-	ITU_Component* component = ctx_estorage.components[component_type];
+	ITU_Component* component = ctx_estorage.components[type];
 	itu_component_pool_remove(component, id);
 }
 
@@ -976,7 +994,7 @@ void itu_entity_destroy(ITU_EntityId id)
 		Uint64 component_bit = 1ll << i;
 		if(!(component_mask & component_bit))
 			continue;
-		itu_entity_component_remove(id, i);
+		itu_entity_component_remove(id, i, ctx_estorage.components[i]->name);
 	}
 
 	// free all tags
